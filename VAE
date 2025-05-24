@@ -1,0 +1,146 @@
+import os
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
+from torchvision import transforms, datasets
+from torchvision.utils import save_image
+from tqdm import tqdm
+from torchvision.datasets import ImageFolder
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+class VAE(nn.Module): 
+    def __init__(self, img_size, latent_dim):  
+        super(VAE, self).__init__()  
+        self.in_channel, self.img_h, self.img_w = img_size  
+        self.h = self.img_h // 32  
+        self.w = self.img_w // 32  
+        hw = self.h * self.w  
+        self.latent_dim = latent_dim  
+        self.hidden_dims = [32, 64, 128, 256, 512]  
+        layers = [] 
+        for hidden_dim in self.hidden_dims:  
+            layers += [nn.Conv2d(self.in_channel, hidden_dim, 3, 2, 1),  
+                       nn.BatchNorm2d(hidden_dim),  
+                       nn.LeakyReLU()]  
+            self.in_channel = hidden_dim  
+
+        self.encoder = nn.Sequential(*layers) 
+
+        self.fc_mu = nn.Linear(self.hidden_dims[-1] * hw, self.latent_dim)  
+        self.fc_var = nn.Linear(self.hidden_dims[-1] * hw, self.latent_dim)  
+        layers = []  
+        self.decoder_input = nn.Linear(self.latent_dim, self.hidden_dims[-1] * hw) 
+        self.hidden_dims.reverse()  
+        for i in range(len(self.hidden_dims) - 1): 
+            layers += [nn.ConvTranspose2d(self.hidden_dims[i], self.hidden_dims[i + 1], 3, 2, 1, 1),  
+                       nn.BatchNorm2d(self.hidden_dims[i + 1]), 
+                       nn.LeakyReLU()]  
+        layers += [nn.ConvTranspose2d(self.hidden_dims[-1], self.hidden_dims[-1], 3, 2, 1, 1),  
+                   nn.BatchNorm2d(self.hidden_dims[-1]),  
+                   nn.LeakyReLU(),  
+                   nn.Conv2d(self.hidden_dims[-1], img_size[0], 3, 1, 1),  
+                   nn.Tanh()]  
+        self.decoder = nn.Sequential(*layers)  
+
+    def encode(self, x):  
+        result = self.encoder(x)  
+        result = torch.flatten(result, 1)  
+        mu = self.fc_mu(result)  
+        log_var = self.fc_var(result)  
+
+        return [mu, log_var]  
+
+    def decode(self, z):  
+        y = self.decoder_input(z).view(-1, self.hidden_dims[0], self.h,
+                                       self.w)  
+        y = self.decoder(y)  
+        return y  
+
+    def reparameterize(self, mu, log_var): 
+        std = torch.exp(0.5 * log_var)  
+        eps = torch.randn_like(std)  
+        return mu + eps * std 
+
+    def forward(self, x):  
+        mu, log_var = self.encode(x)  
+        z = self.reparameterize(mu, log_var)  
+        y = self.decode(z)  
+        return [y, x, mu, log_var]  
+
+    def sample(self, n, cuda):  
+        z = torch.randn(n, self.latent_dim) 
+        if cuda: 
+            z = z.cuda()  
+        images = self.decode(z)  
+        return images  
+
+
+def loss_fn(y, x, mu, log_var):  
+    # recons_loss = F.mse_loss(y, x) 
+    recons_loss = F.l1_loss(y, x)
+    kld_loss = torch.mean(0.5 * torch.sum(mu ** 2 + torch.exp(log_var) - log_var - 1, 1), 0)  
+    return recons_loss + w * kld_loss  
+
+
+if __name__ == "__main__":
+    total_epochs = 500 
+    batch_size = 64  
+    lr = 1e-3  
+    w = 0.00025  
+    v = 1000 
+    num_workers = 8  
+    image_size = 64  
+    image_channel = 1  
+    latent_dim = 256  
+    local_dataset_dir = './dataset'
+    cuda = True if torch.cuda.is_available() else False  
+    img_size = (image_channel, image_size, image_size)  
+
+    vae = VAE(img_size, latent_dim)  
+    if cuda:  
+        vae = vae.cuda()  
+
+    transform = transforms.Compose( 
+        [transforms.Resize(image_size), 
+         transforms.Grayscale(num_output_channels=1),
+         transforms.ToTensor(),  
+         transforms.Normalize([0.5], [0.5])] 
+    )
+
+    dataset = ImageFolder(
+        root=local_dataset_dir,
+        transform=transform
+    )
+    dataloader = DataLoader(
+        dataset=dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        shuffle=True
+    )
+
+    optimizer = torch.optim.Adam(vae.parameters(), lr=lr) 
+    # train loop
+    for epoch in range(total_epochs):  
+        total_loss = 0  
+        pbar = tqdm(total=len(dataloader), desc=f"Epoch {epoch + 1}/{total_epochs}", postfix=dict,
+                    miniters=0.3)  
+        for i, (img, _) in enumerate(dataloader): 
+            if cuda:  
+                img = img.cuda() 
+            vae.train()  
+            optimizer.zero_grad()  
+            y, x, mu, log_var = vae(img)  
+            loss = loss_fn(y, x, mu, log_var)  
+            loss.backward()  
+            optimizer.step()  
+            total_loss += loss.item()  
+            pbar.set_postfix(**{"Loss": loss.item()})  
+            pbar.update(1)  
+        pbar.close() 
+        print("total_loss:%.4f" %
+              (total_loss / len(dataloader))) 
+        torch.save(vae.state_dict(), 'C:/Users/LXR/PycharmProjects/VAE_DDIM/vaeee7/vae_weights.pth')
+        
