@@ -142,5 +142,5 @@ if __name__ == "__main__":
         pbar.close() 
         print("total_loss:%.4f" %
               (total_loss / len(dataloader))) 
-        torch.save(vae.state_dict(), 'C:/Users/LXR/PycharmProjects/VAE_DDIM/vaeee7/vae_weights.pth')
+        torch.save(vae.state_dict(), './vae_weights.pth')
         
