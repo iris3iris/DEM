@@ -15,7 +15,7 @@ import os
 from vae import VAE
 vae = VAE(img_size=(1, 128, 128), latent_dim=20)
 vae = vae.to('cuda')
-vae.load_state_dict(torch.load('vae_weights_21.pth'))
+vae.load_state_dict(torch.load('vae_weights.pth'))
 Image_size = 128
 
 
